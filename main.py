@@ -4,6 +4,7 @@ pd.options.mode.chained_assignment = None  # default='warn'
 from plotly.subplots import make_subplots
 import plotly.graph_objects as go
 from datetime import datetime
+import plotly.io as pio
 from IPython.display import display
 
 verbose = True
@@ -98,7 +99,8 @@ def plot_global_case_statistics(df_final):
 		plot_bgcolor='rgb(255,255,255)',
 		paper_bgcolor ='rgb(211,211,211)'
 		)
-	fig.show()
+	pio.write_html(fig, file='index.html', auto_open=True)
+	# fig.show()
 	
 	
 def main():
@@ -106,6 +108,7 @@ def main():
 	df = clean_data(df)
 	df = get_sum_statistics(df)
 	plot_global_case_statistics(df)
+	
 	# display(df.head(5))
 	print(f"Done {df.shape}")
 
