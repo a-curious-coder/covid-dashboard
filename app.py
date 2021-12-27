@@ -15,7 +15,6 @@ import numpy as np
 pd.options.mode.chained_assignment = None  # default='warn'
 
 verbose = False
-# df = pd.DataFrame()
 
 app = dash.Dash(__name__)
 
@@ -250,7 +249,6 @@ app.layout = html.Div([
     Output(component_id='pie', component_property='figure'),
     [Input(component_id='my_dropdown', component_property='value')]
 )
-
 
 def update_graph(my_dropdown_choice):
     print("[*]\tUpdating graph")
