@@ -7,14 +7,14 @@ from plotly.subplots import make_subplots
 import plotly.express as px
 import requests
 import dash
-import dash_core_components as dcc
+from dash import dcc
 from dash import html
 from dash.dependencies import Input, Output
 import pandas as pd
 pd.options.mode.chained_assignment = None  # default='warn'
 
 verbose = True
-df = pd.DataFrame()
+# df = pd.DataFrame()
 
 app = dash.Dash(__name__)
 
@@ -250,6 +250,9 @@ app.layout = html.Div([
     [Input(component_id='my_dropdown', component_property='value')]
 )
 def update_graph(my_dropdown_choice):
+    df = pd.read_csv("clean_data.csv")
+    del df[df.columns[0]]
+    print(df.head(5))
     today = date.today()
     d1 = today.strftime("%d/%m/%Y")
     labels = ["Confirmed", "Recovered", "Deaths"]
@@ -414,10 +417,12 @@ def plot_global_case_statistics(df_final):
 
 
 def main():
-    global df
+    # global df
     df = get_covid_data()
+    # df.to_csv("data.csv")
     df = clean_data(df)
     df = get_sum_statistics(df)
+    df.to_csv("clean_data.csv")
     # plot_global_case_statistics(df)
     # for value in df["Country_Region"].unique():
     #     print("{\'label\': \'" + value + "\', \'value\': \'" + value + "\'},")
