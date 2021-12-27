@@ -248,7 +248,6 @@ app.layout = html.Div([
     Output(component_id='pie', component_property='figure'),
     [Input(component_id='my_dropdown', component_property='value')]
 )
-
 def update_graph(my_dropdown_choice):
     today = date.today()
     d1 = today.strftime("%d/%m/%Y")
@@ -261,13 +260,14 @@ def update_graph(my_dropdown_choice):
         del df_copy[df_copy.columns[0]]
     else:
         values = get_country_stats(df, my_dropdown_choice)
-        df_copy = pd.DataFrame({"Confirmed": [values[0]], "Recovered": [values[1]], "Deaths": [values[2]]})
+        df_copy = pd.DataFrame({"Confirmed": [values[0]], "Recovered": [
+                               values[1]], "Deaths": [values[2]]})
 
     df_copy = df_copy.T
     df_copy = df_copy.rename(columns={df_copy.columns[0]: my_dropdown_choice})
 
     piechart = px.pie(
-        title = f"{my_dropdown_choice}",
+        title=f"{my_dropdown_choice}",
         data_frame=df_copy,
         names=["Confirmed", "Deaths", "Recovered"],
         values=my_dropdown_choice,
@@ -277,8 +277,9 @@ def update_graph(my_dropdown_choice):
     piechart.update_layout(
         margin=dict(t=0, b=0, l=0, r=0),
         title_x=0.5,
-        title_y = 0.475
+        title_y=0.475
     )
+    # pio.write_html(piechart, file='index.html', auto_open=True)
     return (piechart)
 
 
@@ -369,11 +370,50 @@ def get_country_stats(data, country):
     stats = [confirmed, recovered, deaths]
     return stats
 
+
+def plot_global_case_statistics(df_final):
+    dprint("Plotting data")
+    total_confirmed = df_final["Confirmed"].sum()
+    total_recovered = df_final["Recovered"].sum()
+    total_deaths = df_final["Deaths"].sum()
+    labels = ["Confirmed", "Recovered", "Deaths"]
+    values = [total_confirmed, total_recovered, total_deaths]
+    fig = go.Figure(data=[go.Pie(labels=labels, values=values, hole=.5, )])
+    fig.update_layout(
+        title="Plotted",
+        plot_bgcolor='rgb(255,255,255)',
+        paper_bgcolor='rgb(211,211,211)',
+        updatemenus=[
+            dict(
+                buttons=list([
+                    dict(
+                        args=["values", values],
+                        label="Global",
+                    ),
+                    dict(
+                        args=["values", get_country_stats(df_final, "United Kingdom")],
+                        label="United Kingdom",
+                    )
+                ]),
+                direction="down",
+                pad={"r": 10, "t": 10},
+                showactive=True,
+                x=0.1,
+                xanchor="left",
+                y=1.1,
+                yanchor="top"
+            )]
+    )
+    pio.write_html(fig, file='index.html', auto_open=True)
+    # fig.show()
+
+
 def main():
     global df
     df = get_covid_data()
     df = clean_data(df)
     df = get_sum_statistics(df)
+    # plot_global_case_statistics(df)
     # for value in df["Country_Region"].unique():
     #     print("{\'label\': \'" + value + "\', \'value\': \'" + value + "\'},")
     print(f"[*]\tData Ready")
