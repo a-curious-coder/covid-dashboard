@@ -257,7 +257,10 @@ def update_graph(my_dropdown_choice):
     df_copy = pd.DataFrame()
     dprint("[*]\tPlotting Data")
     if my_dropdown_choice != "Global":
-        df_copy = df[df["Country_Region"] == my_dropdown_choice]
+        try:
+            df_copy = df[df["Country_Region"] == my_dropdown_choice]
+        except:
+            print(f"Not caught it!\n{df.columns.values}")
         del df_copy[df_copy.columns[0]]
     else:
         values = get_country_stats(df, my_dropdown_choice)
@@ -392,7 +395,8 @@ def plot_global_case_statistics(df_final):
                         label="Global",
                     ),
                     dict(
-                        args=["values", get_country_stats(df_final, "United Kingdom")],
+                        args=["values", get_country_stats(
+                            df_final, "United Kingdom")],
                         label="United Kingdom",
                     )
                 ]),
