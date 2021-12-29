@@ -7,14 +7,20 @@ from plotly.subplots import make_subplots
 import plotly.express as px
 import requests
 import dash
+import datetime
 from dash import dcc
 from dash import html
 from dash.dependencies import Input, Output
 import pandas as pd
 import numpy as np
+from countryinfo import CountryInfo
+import os
+import glob
+from os.path import exists
 pd.options.mode.chained_assignment = None  # default='warn'
 
-verbose = False
+verbose = True
+generate_new_files = False
 
 app = dash.Dash(__name__)
 
@@ -238,7 +244,7 @@ app.layout = html.Div([
     ]),
 
     html.Div([
-        dcc.Graph(id='pie')
+        dcc.Graph(id='dashboard')
     ])
 ])
 
@@ -246,70 +252,392 @@ app.layout = html.Div([
 
 
 @app.callback(
-    Output(component_id='pie', component_property='figure'),
+    Output(component_id='dashboard', component_property='figure'),
     [Input(component_id='my_dropdown', component_property='value')]
 )
-
-def update_graph(my_dropdown_choice):
-    print("[*]\tUpdating graph")
-    df = pd.read_csv("clean_data.csv")
-    del df[df.columns[0]]
+def update_graph(country):
+    # Calculate today / yesterday
     today = date.today()
-    d1 = today.strftime("%d/%m/%Y")
+    # Today's data's latest entry will have yesterday's date
+    yesterday = today - datetime.timedelta(days=1)
+    # Format dates
+    today = today.strftime("%d_%m_%Y")
+    yesterday = yesterday.strftime("%d_%m_%Y")
+
+    dprint("[*]\tUpdating graph")
+
+    # Read in cleaned esri data (All Time Statistics)
+    df = pd.read_csv("cleaned_esri_data.csv")
+
     labels = ["Confirmed", "Deaths", "Recovered"]
-    stats = get_country_stats(df, my_dropdown_choice)
+    stats = get_country_stats(df, country)
     df_copy = pd.DataFrame()
     dprint("[*]\tPlotting Data")
-    if my_dropdown_choice != "Global":
-        df_copy = df[df["Country_Region"] == my_dropdown_choice]
+    if country != "Global":
+        df_copy = df[df["Country_Region"] == country]
         del df_copy[df_copy.columns[0]]
     else:
-        values = get_country_stats(df, my_dropdown_choice)
-        df_copy = pd.DataFrame({"Confirmed": [values[0]], "Deaths": [values[2]], "Recovered": [values[1]]})
+        values = get_country_stats(df, country)
+        df_copy = pd.DataFrame({"Confirmed": [values[0]], "Deaths": [
+                               values[2]], "Recovered": [values[1]]})
 
     # Transpose table for single column table
     df_copy = df_copy.T
     # Rename column from index 0 to country name
-    df_copy = df_copy.rename(columns={df_copy.columns[0]: my_dropdown_choice})
+    df_copy = df_copy.rename(columns={df_copy.columns[0]: country})
     # Replace '0' values with nan values so they're not needlessly labelled in plot
     df_copy = df_copy.replace(0, np.nan)
 
-    piechart = px.pie(
-        title=f"{my_dropdown_choice}",
-        data_frame=df_copy,
-        names=labels,
-        values=my_dropdown_choice,
-        hover_name = labels,
-        hole=.4
+    fig = make_subplots(
+        rows=5, cols=6,
+        specs=[
+            [{"type": "pie", "rowspan": 2, "colspan": 2}, None, {"type": "indicator"}, {
+                "type": "indicator"}, {"type": "indicator"}, None],
+            [None, None, {"type": "bar", "colspan": 3}, None, None, None],
+            [None, None, {"type": "bar", "colspan": 3}, None, None, None],
+            [None, None, {"type": "bar", "colspan": 3}, None, None, None],
+            [None, None, {"type": "bar", "colspan": 3}, None, None, None]
+        ]
     )
 
-    piechart.update_layout(
-        margin=dict(t=150, b=0, l=0, r=0),
-        title_x = 0.5
-    )
+    fig = country_cases_deaths_pie_chart(fig, country, labels, df_copy[country])
+    
+    # TODO: Make this malleable for any 'country'
+    # Read data
+    
+    df = pd.DataFrame()
+    if country == "Global":
+        print("Global")
+        df = pd.read_csv(f"covid_data_{today}.csv")
+        df = transform_owid_covid_data(df)
+    else:
+        print(country)
+        if exists(f"covid_data_clean_{country}_{today}.csv") == False:
+            print("Generating data")
+            generate_covid_data2(country)
+        df = pd.read_csv(f"covid_data_clean_{country}_{today}.csv")
+        print(df['Country'].head(5))
+    # If country's data doesn't exist, keep global
+    if df.shape[0] == 0:
+        print(f"{country} not available")
+        df = pd.read_csv(f"covid_data_{today}.csv")
+        df = transform_owid_covid_data(df)
+        country = f"(Country {country} not available) : Global"
+    # Get country population
+    pop = 0
+    if "Global" not in country:
+        print(country)
+        pop = CountryInfo(country).population()
+    else:
+        # World pop
+        pop = 7300000000
+    
+    dprint("[*]\tPlotting indicators")
+    # Add 'vaccinated once' indicator
+    fig = vaccinated_once_indicator(fig, df, pop, row = 1, col = 3)
+    # Add 'vaccinated_fully" indicator
+    fig = vaccinated_fully_indicator(fig, df, pop, row = 1, col = 4)
+    # Add 'boosted' indicator
+    fig = boosted_indicator(fig, df, pop, row = 1, col = 5)
+    # # Add Bar chart showing top ten countries with highest fully vaccinations
+    fig = top_ten_vaccinated(fig, today, yesterday, row= 2, col = 3)
 
+    fig.layout.height = 700
+    # fig.update_layout(
+    #     margin={
+    #         't': 50,
+    #         'b': 0,
+    #         'r': 0,
+    #         'l': 0,
+    #         'pad': 200,
+    #     }
+    # )
+    print("[*]\tPlotted")
+    return (fig)
+
+
+# Non-infected, infected, deaths
+def country_cases_deaths_pie_chart(fig, country, labels, values):
+    values = values.tolist()
+    if country != "Global":
+        pop = CountryInfo(country).population()
+    else:
+        pop = 7300000000
+        
+    labels.append("Non-Infected")
+    values.append(pop - values[0] - values[1])
+
+
+    # Pie chart
+    fig.add_trace(
+        go.Pie(title=str(country), labels=labels, values=values, hole=.5),
+        row=1, col=1)
     # Replaces percentages with actual values
-    piechart.update_traces(textinfo='value+label', 
-                        # textinfo='value', 
-                        textfont_size=12,
-                        marker=dict(line=dict(color='#000000', width=1)))
-    # pio.write_html(piechart, file='index.html', auto_open=True)
-    return (piechart)
+    # fig.update_traces(textinfo='value+label',
+    #                   textfont_size=12,
+    #                   marker=dict(line=dict(color='#000000', width=1)))
+    return fig
 
+def vaccinated_once_indicator(fig, df, population, row, col):
+    vaccination_count = int(df["Vaccinated_Once"].head(1))
+    fig.add_trace(
+        go.Indicator(
+            mode="number",
+            number=dict(suffix="%"),
+            value=vaccination_count/population*100,
+            title=f"Vaccinated Once"
+        ),
+        row=row, col=col
+    )
+    return fig
 
-def get_covid_data():
+def vaccinated_fully_indicator(fig, df, population, row, col):
+    vaccination_count = int(df["Vaccinated_Full"].head(1))
+    fig.add_trace(
+        go.Indicator(
+            mode="number",
+            number=dict(suffix="%"),
+            value=vaccination_count/population*100,
+            title=f"Fully Vaccinated"
+        ),
+        row=row, col=col
+    )
+    return fig
+
+def boosted_indicator(fig, df, population, row, col):
+    vaccination_count = int(df["Vaccinated_Booster"].head(1))
+    fig.add_trace(
+        go.Indicator(
+            mode="number",
+            number=dict(suffix="%"),
+            value=vaccination_count/population*100,
+            title="Booster"
+        ),
+        row=row, col=col
+    )
+    return fig
+
+def top_ten_vaccinated(fig, date, yesterday, row, col):
+    # TODO: refine this with percentages of country population that's vaccinated
+    # Calculate the countries with top 10 leading fully vaccinated
+    data = get_covid_data(date)
+    
+    df_countries = []
+    # For each country
+    for country in data['location'].unique():
+        # Update NaN/0 values to latest vacc value
+        fixed = update_null_vacc_values(data[data['location'] == country], [
+                                        'people_fully_vaccinated'])
+        # Append update null vacc values
+        df_countries.append(fixed)
+
+    data = pd.concat(df_countries)
+    # Filter data to only include latest entries
+    data = data[data['date'] == str(yesterday)]
+
+    data = data.sort_values(by="people_fully_vaccinated",
+                            ascending=False).head(10)
+    new_data = pd.DataFrame(
+        {"Country": data['location'], "Vacc": data['people_fully_vaccinated']})
+
+    countries = data['location'].tolist()
+    cases = data['people_fully_vaccinated'].tolist()
+    cases = [int(x) for x in cases]
+
+    fig.add_trace(go.Bar(x=countries,
+                         y=cases,
+                         name='Country'), row=2, col=3)
+    print("bar")
+    return fig
+    
+def get_esri_covid_data():
     """
-Gets the latest covid 19 data
-:return:
-"""
-    raw = requests.get(
-        "https://services1.arcgis.com/0MSEUqKaxRlEPj5g/arcgis/rest/services/Coronavirus_2019_nCoV_Cases/FeatureServer"
-        "/1/query?where=1%3D1&outFields=*&outSR=4326&f=json")
-    raw_json = raw.json()
-    df = pd.DataFrame(raw_json["features"])
-    df = transform_data(df)
-    dprint("[*]\tGetting COVID-19 Data")
+    Gets the latest covid 19 data
+    :return:
+    """
+    if exists("cleaned_esri_data.csv") == False:
+        # Download CSV data from ESRI
+        raw = requests.get(
+            "https://services1.arcgis.com/0MSEUqKaxRlEPj5g/arcgis/rest/services/Coronavirus_2019_nCoV_Cases/FeatureServer"
+            "/1/query?where=1%3D1&outFields=*&outSR=4326&f=json")
+        raw_json = raw.json()
+        # Store data into dataframe
+        df = pd.DataFrame(raw_json["features"])
+        # Transform data
+        df = transform_data(df)
+        dprint("[*]\tGetting COVID-19 Data")
+        df = clean_esri_data(df)
+        df = get_sum_statistics(df)
+        df.to_csv("cleaned_esri_data.csv", index=False)
+    df = pd.read_csv("cleaned_esri_data.csv")
     return df
+
+
+def clean_esri_data(data):
+    cleaned_data = data.dropna(subset=["Last_Update"])
+    cleaned_data["Province_State"].fillna(value="", inplace=True)
+
+    cleaned_data["Last_Update"] = cleaned_data["Last_Update"]/1000
+    cleaned_data["Last_Update"] = cleaned_data["Last_Update"].apply(
+        convert_time)
+    dprint("[*]\tCleaning Data")
+    return cleaned_data
+
+
+def generate_covid_data():
+    today = date.today()
+    d1 = today.strftime("%d_%m_%Y")
+    # If there's no file with today's statistics, download it
+    if exists(f"covid_data_{d1}.csv") == False:
+        download_covid_data()
+
+    if generate_new_files or exists(f"covid_data_clean_UK_{d1}.csv") == False:
+        # Get today's covid data
+        df = get_covid_data(d1)
+        # Clean data
+        # df = clean_owid_data(df)
+        # Filter dataframe to only include country stats
+        df = df[df["location"] == "United Kingdom"]
+        # Save uncleaned data
+        df.to_csv(f"covid_data_unclean_UK_{d1}.csv", index=False)
+        # Refine covid dataframe
+        df = transform_owid_covid_data(df)
+        # Save data to csv
+        df.to_csv(f"covid_data_clean_UK_{d1}.csv", index=False)
+
+    df = pd.read_csv(f"covid_data_clean_UK_{d1}.csv")
+    return df
+
+def generate_covid_data2(country):
+    today = date.today()
+    d1 = today.strftime("%d_%m_%Y")
+    # If there's no file with today's statistics, download it
+    if exists(f"covid_data_{d1}.csv") == False:
+        download_covid_data()
+
+    if generate_new_files or exists(f"covid_data_clean_{country}_{d1}.csv") == False:
+        # Get today's covid data
+        df = get_covid_data(d1)
+        # Clean data
+        # df = clean_owid_data(df)
+        # Filter dataframe to only include country stats
+        df = df[df["location"] == country]
+        # Save uncleaned data
+        df.to_csv(f"covid_data_unclean_{country}_{d1}.csv", index=False)
+        # Refine covid dataframe
+        df = transform_owid_covid_data(df)
+        # Save data to csv
+        df.to_csv(f"covid_data_clean_{country}_{d1}.csv", index=False)
+    df = pd.read_csv(f"covid_data_clean_{country}_{d1}.csv")
+    
+    return df
+
+
+def download_covid_data():
+    today = date.today()
+    d1 = today.strftime("%d_%m_%Y")
+    dprint(f"[*]\Downloading OWID COVID-19 Data for {d1}")
+    csv_url = 'https://covid.ourworldindata.org/data/owid-covid-data.csv'
+    req = requests.get(csv_url)
+    url_content = req.content
+    csv_file = open(f"covid_data_{d1}.csv", 'wb')
+    csv_file.write(url_content)
+    csv_file.close()
+    df = pd.read_csv(f"covid_data_{d1}.csv")
+    df = clean_owid_data(df)
+    df.to_csv(f"covid_data_{d1}.csv", index = False)
+
+
+def format_and_sort_by_date(df, date):
+    try:
+        df[date] = pd.to_datetime(df[date], format='%Y-%m-%d')
+    except ValueError:
+        raise ValueError("Dates are already formatted correctly")
+    
+    df.sort_values(by=date, inplace=True, ascending=False)
+    df[date] = df[date].dt.strftime('%d_%m_%Y')
+    return df
+
+
+def get_covid_data(date):
+    # Should be cleaned already
+    # Read file to dataframe
+    df = pd.read_csv(f"covid_data_{date}.csv")
+    return df
+
+
+def clean_owid_data(data):
+    # Format and sort by date
+    data = format_and_sort_by_date(data, "date")
+    # Replace null values with value '0'
+    data = data.fillna(0)
+    # Remove continents and anything that isn't a country
+    continents = ["Asia", "Africa", "North America", "South America",
+                  "Antarctica", "Europe", "Australia", "European Union"]
+    for continent in continents:
+        data = data[data['location'] != continent]
+    data = data[data['location'] != "World"]
+    data = data[data['location'] != "Upper middle income"]
+    data = data[data['location'] != "High income"]
+    data = data[data['location'] != "Lower middle income"]
+
+    # TODO: Sort out vaccinated count
+    # updated_vacc = []
+    # # 'Vaccinated' columns accumulate value each day - change 0s to max value
+    # vaccinated_columns = ["people_vaccinated", "people_fully_vaccinated", "total_boosters"]
+    # for country in data['location'].unique():
+    #     for column in vaccinated_columns:
+    #         fixed = update_null_vacc_values(country, data, column)
+    #     updated_vacc.append(fixed)
+    #     pd.concat(updated_vacc)
+    return data
+
+
+def transform_owid_covid_data(data):
+    dprint("[*]\tTransforming OWID Data")
+    dprint(data.shape)
+    # Initialising dataframe with data we're interested in
+    clean_data = pd.DataFrame(
+        {"Country": data["location"],
+         "Confirmed": data["new_cases"],
+         "Deaths": data["new_deaths"],
+         "Hosp_patients": data["hosp_patients"],
+         "Vaccinations": data["new_vaccinations"],
+         "Vaccinated_Once": data["people_vaccinated"],
+         "Vaccinated_Full": data["people_fully_vaccinated"],
+         "Vaccinated_Booster": data["total_boosters"],
+         "Date": data["date"]})
+    return clean_data
+
+
+def update_null_vacc_values(clean_data, vaccinated_columns):
+    # Caters for single country only
+    # For each vaccination column
+    for column in vaccinated_columns:
+        # Store column as list
+        vaccinated_data = clean_data[column].tolist()
+        # Only check for '0' values in first 100 rows
+        entries = 100
+        for i, value in enumerate(vaccinated_data):
+            # When we've hit the limit of entries
+            if i == entries:
+                continue
+            if value == 0:
+                vaccinated_data[i] = max(vaccinated_data)
+        # Apply new cleaned list to dataframe
+        clean_data[column] = vaccinated_data
+    return clean_data
+
+
+def clean_directory():
+    today = date.today()
+    d1 = today.strftime("%d_%m_%Y")
+
+    dprint("[*]\tChecking for old files")
+    for filename in glob.glob("*.csv"):
+        if "covid_data" in filename:
+            if d1 not in filename:
+                os.remove(filename)
 
 
 def get_sum_statistics(data):
@@ -343,17 +671,6 @@ Filters the data to return the information we want
     return df_final
 
 
-def clean_data(data):
-    cleaned_data = data.dropna(subset=["Last_Update"])
-    cleaned_data["Province_State"].fillna(value="", inplace=True)
-
-    cleaned_data["Last_Update"] = cleaned_data["Last_Update"]/1000
-    cleaned_data["Last_Update"] = cleaned_data["Last_Update"].apply(
-        convert_time)
-    dprint("[*]\tCleaning Data")
-    return cleaned_data
-
-
 def convert_time(t):
     """
 Converts time in milliseconds to datetime format
@@ -361,7 +678,7 @@ Converts time in milliseconds to datetime format
 :return:
 """
     t = int(t)
-    return datetime.fromtimestamp(t)
+    return datetime.datetime.fromtimestamp(t)
 
 
 def dprint(text):
@@ -386,16 +703,11 @@ def get_country_stats(data, country):
 
 
 def main():
-    # global df
-    df = get_covid_data()
-    # df.to_csv("data.csv")
-    df = clean_data(df)
-    df = get_sum_statistics(df)
-    df.to_csv("clean_data.csv")
-    # plot_global_case_statistics(df)
-    # for value in df["Country_Region"].unique():
-    #     print("{\'label\': \'" + value + "\', \'value\': \'" + value + "\'},")
-    dprint(f"[*]\tData Ready")
+    dprint("-------------------------------")
+    clean_directory()
+    generate_covid_data()
+    get_esri_covid_data()
+    dprint("[*]\tData Ready")
 
 
 if __name__ == "__main__":
